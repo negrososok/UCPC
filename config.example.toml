@@ -1,0 +1,41 @@
+# UCPC — текстовий помічник. Налаштування також доступні у вікні програми.
+auth_mode = "chatgpt"
+vision_model = "gpt-5.6-sol"
+api_vision_model = "gpt-4.1-mini"
+system_prompt_file = "system_prompt.txt"
+request_prompt = "Проаналізуй скріншот згідно із системною інструкцією."
+max_output_tokens = 1800
+request_timeout = 60.0
+monitor = 1
+max_image_size = 1920
+history_limit = 20
+notifications = false
+overlay_enabled = true
+theme = "light"
+overlay_font_size = 18
+overlay_opacity = 94
+overlay_width = 660
+overlay_height = 580
+move_step = 24
+scroll_lines = 5
+
+[hotkeys]
+capture = "ctrl+win+f8"
+overlay = "ctrl+win+f11"
+settings = "ctrl+win+f12"
+cancel = "ctrl+win+f9"
+previous = "ctrl+win+z"
+next = "ctrl+win+x"
+overlay_up = "ctrl+win+pageup"
+overlay_down = "ctrl+win+pagedown"
+scroll_left = "ctrl+win+a"
+scroll_right = "ctrl+win+r"
+top = "ctrl+win+home"
+bottom = "ctrl+win+end"
+move_up = "ctrl+win+y"
+move_down = "ctrl+win+h"
+move_left = "ctrl+win+g"
+move_right = "ctrl+win+j"
+center = "ctrl+win+f10"
+font_smaller = "ctrl+win+f5"
+font_larger = "ctrl+win+f6"

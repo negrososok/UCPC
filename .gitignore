@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.env
+config.toml
+system_prompt.txt
+data/
+build/
+dist/
+*.spec
+.coverage*
+coverage.json
+stress-results*.xml
+
