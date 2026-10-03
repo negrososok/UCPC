@@ -13,6 +13,7 @@ dependencies = [
   "PyJWT[crypto]>=2.10,<3",
   "pywin32>=311; sys_platform == 'win32'",
   "filelock>=3.30,<4",
+  "Pygments>=2.21,<3",
 ]
 
 [dependency-groups]

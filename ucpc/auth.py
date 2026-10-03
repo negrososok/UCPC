@@ -58,6 +58,11 @@ def validate_callback(
 
     if not secrets.compare_digest(value("state").encode(), state.encode()):
         raise ValueError("Неправильний state входу")
+    if value("error") == "3p_login_workspace_scope_denied":
+        raise ValueError(
+            "Це підключення належить іншому акаунту або робочому простору. "
+            "Скасуй вхід і натисни «Інший акаунт / робочий простір» у UCPC."
+        )
     if value("error"):
         raise ValueError("Вхід не дозволено або скасовано")
     client = value("client_id") or registered_client
@@ -149,10 +154,39 @@ class Auth:
                 return "ChatGPT: вхід потрібен"
             return "ChatGPT: " + record.get("email", "підключено")
 
-    def login(self, timeout: float = 180, cancel: Event | None = None, on_ready=None) -> str:
+    def accounts(self) -> list[dict]:
+        """Return display metadata only; every registration keeps its own credentials."""
+        with self.lock:
+            active = self._load()
+        registrations = dict(active.get("registrations", {}))
+        if active.get("client_id"):
+            registrations[active["client_id"]] = active
+        return [
+            {
+                "id": client,
+                "label": (record.get("email") or "Акаунт ChatGPT") + " · " + client[-8:],
+                "active": client == active.get("client_id"),
+            }
+            for client, record in registrations.items()
+        ]
+
+    def login(
+        self, timeout: float = 180, cancel: Event | None = None, on_ready=None,
+        *, new_account: bool = False, account_id: str | None = None,
+    ) -> str:
+        if new_account and account_id is not None:
+            raise ValueError("Обери збережений акаунт або нове підключення")
         check_cancelled(cancel)
         with self.lock:
-            old = self._load()
+            initial = self._load()
+        if new_account:
+            old = {}
+        elif account_id is None or account_id == initial.get("client_id"):
+            old = initial
+        else:
+            old = initial.get("registrations", {}).get(account_id)
+            if old is None:
+                raise ValueError("Збережене підключення не знайдено. Додай інший акаунт.")
         client_id = old.get("client_id")
         host = self.host_id()
         state, nonce, verifier = [secrets.token_urlsafe(32) for _ in range(3)]
@@ -202,6 +236,8 @@ class Auth:
             if client_id:
                 if old.get("id_token"):
                     params["id_token_hint"] = old["id_token"]
+                if old.get("email"):
+                    params["login_hint"] = old["email"]
             else:
                 params["agent_name_hint"] = "UCPC"
             url = ISSUER + "/api/accounts/authorize?" + urlencode(params)
@@ -248,15 +284,31 @@ class Auth:
         )
         with self.lock:
             check_cancelled(cancel)
+            latest = self._load()
+            if latest.get("client_id") != initial.get("client_id"):
+                raise RuntimeError("Активний акаунт уже змінився. Повтори вхід.")
+            registrations = dict(latest.get("registrations", {}))
+            if latest.get("client_id"):
+                registrations[latest["client_id"]] = {
+                    key: value for key, value in latest.items() if key != "registrations"
+                }
+            previous = registrations.pop(issued, {})
+            if previous.get("subject") and previous["subject"] != identity["sub"]:
+                raise RuntimeError("Виданий client_id належить іншому акаунту")
+            if registrations:
+                record["registrations"] = registrations
             self._save(record)
         return record["email"]
 
-    def access_token(self) -> str:
+    def access_token(self, *, min_validity: float = 60, rejected_token: str | None = None) -> str:
         with self.lock:
             record = self._load()
             if not record.get("access_token"):
                 raise RuntimeError("Спочатку обери Continue with ChatGPT у меню UCPC")
-            if record["expires_at"] < time.time() + 60:
+            if (
+                record["expires_at"] < time.time() + min_validity
+                or (rejected_token is not None and record["access_token"] == rejected_token)
+            ):
                 if not record.get("refresh_token"):
                     raise RuntimeError("Потрібен повторний вхід у ChatGPT")
                 tokens = token_request(

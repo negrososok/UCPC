@@ -56,6 +56,24 @@ def test_streaming_preserves_selection_and_scroll(overlay):
     assert overlay.text.toPlainText() == "New answer" and bar.value() == 0
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("statement", ["return x;", 'return "Привіт 👋";', "return 123;"])
+def test_final_tab_formatting_preserves_code_selection(overlay, reverse, statement):
+    from ucpc.code_format import code_tabs
+
+    track = object()
+    initial = "int main() {\n    int x = 2;\n    " + statement + "\n}\n"
+    overlay.update_response(track, initial, "Streaming")
+    cursor = overlay.text.textCursor()
+    start = initial.index("return")
+    size = len(statement.encode("utf-16-le")) // 2
+    cursor.setPosition(start + size if reverse else start)
+    cursor.setPosition(start if reverse else start + size, QTextCursor.MoveMode.KeepAnchor)
+    overlay.text.setTextCursor(cursor)
+    overlay.update_response(track, code_tabs(initial), "Ready")
+    assert overlay.text.textCursor().selectedText() == statement
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows capture exclusion")
 def test_real_window_affinity_is_confirmed_and_survives_show(overlay):
     user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -121,3 +139,30 @@ def test_excluded_window_is_absent_from_real_desktop_capture(kind, opacity, them
         protected.deleteLater()
         backdrop.deleteLater()
         qt.processEvents()
+
+
+@pytest.mark.stress
+def test_one_hundred_theme_hide_resize_cycles_keep_capture_exclusion_and_reading_state(overlay):
+    from ucpc.history import Track
+
+    qt = QApplication.instance()
+    track = Track(text="\n".join(f"line {i}: " + "code " * 80 for i in range(200)))
+    overlay.update_response(track, track.text, "Ready")
+    overlay.show_protected()
+    native = ctypes.WinDLL("user32", use_last_error=True)
+    native.GetWindowDisplayAffinity.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    for number in range(100):
+        overlay.set_theme("dark" if number % 2 else "light")
+        overlay.resize(540 + number % 200, 420 + number % 100)
+        overlay.nudge(20 if number % 2 else -20, 10)
+        overlay.scroll(1)
+        overlay.remember_position()
+        position = track.scroll_y
+        overlay.hide()
+        overlay.show_protected()
+        qt.processEvents()
+        actual = wintypes.DWORD()
+        assert native.GetWindowDisplayAffinity(int(overlay.winId()), ctypes.byref(actual))
+        assert actual.value == 0x11 and overlay.protected
+        assert overlay.text.toPlainText() == track.text and track.scroll_y == position
+        assert overlay.text.verticalScrollBar().value() == position

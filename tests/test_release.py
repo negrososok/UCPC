@@ -34,9 +34,37 @@ def test_distribution_audit_rejects_runtime_credentials(tmp_path):
 
 
 def test_audit_normalizes_modifier_order_and_checks_chord_prefixes():
-    conflict = audit([{"key": "win+ctrl+f8 ctrl+k", "command": "test"}])
-    assert conflict == {"capture": ["test"]}
+    conflict = audit([{"key": "win+ctrl+f7 ctrl+k", "command": "test"}])
+    assert conflict == {"copy": ["test"]}
+    assert audit([{"key": "mouse4", "command": "side-button"}]) == {
+        "capture": ["side-button"]
+    }
     assert not audit([{"key": "ctrl+f8", "command": "unrelated"}])
+
+
+def test_shortcut_audit_handles_mouse_defaults_and_installed_compiled_keyboard_map(
+    tmp_path, monkeypatch, capsys,
+):
+    from io import BytesIO
+
+    import tools.audit_shortcuts as shortcuts
+
+    local = tmp_path / "AppData/Local/Programs/Microsoft VS Code/version/resources/app"
+    bundle = local / "out/vs/workbench/workbench.desktop.main.js"
+    bundle.parent.mkdir(parents=True)
+    (local / "package.json").write_text('{"version":"synthetic"}', encoding="utf8")
+    bundle.write_text("primary:1234,secondary:[4321]", encoding="utf8")
+    monkeypatch.setattr(shortcuts.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(shortcuts, "__file__", str(tmp_path / "tools/audit_shortcuts.py"))
+    monkeypatch.setattr(shortcuts.urllib.request, "urlopen", lambda *_args, **_kw: BytesIO(b"[]"))
+
+    shortcuts.main()
+
+    report = json.loads((tmp_path / "data/shortcut-audit.json").read_text(encoding="utf8"))
+    assert report["checked_bindings"]["capture"] == "mouse4"
+    assert report["checked_bindings"]["send"] == "mouse5"
+    assert report["installed_versions"] == ["synthetic"] and report["conflicts"] == {}
+    assert json.loads(capsys.readouterr().out)["conflicts"] == {}
 
 
 def test_default_bindings_match_the_saved_microsoft_windows_list():

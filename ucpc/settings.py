@@ -6,6 +6,7 @@ from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QFormLayout,
     QGridLayout,
     QHBoxLayout,
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QScrollArea,
+    QSlider,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -45,7 +47,7 @@ class BindEdit(QPushButton):
         if self.recording:
             return
         self.recording = True
-        self.setText("Натисни комбінацію…")
+        self.setText("Клавіші або Mouse4/Mouse5…")
         self.recording_changed.emit(True)
 
     def stop_recording(self):
@@ -125,6 +127,36 @@ class BindEdit(QPushButton):
             self.stop_recording()
         event.accept()
 
+    def mousePressEvent(self, event):
+        name = {
+            Qt.MouseButton.BackButton: "mouse4",
+            Qt.MouseButton.ForwardButton: "mouse5",
+        }.get(event.button())
+        if name is None:
+            return super().mousePressEvent(event)
+        if self.recording:
+            parts = [modifier for flag, modifier in (
+                (Qt.KeyboardModifier.ControlModifier, "ctrl"),
+                (Qt.KeyboardModifier.AltModifier, "alt"),
+                (Qt.KeyboardModifier.ShiftModifier, "shift"),
+                (Qt.KeyboardModifier.MetaModifier, "win"),
+            ) if event.modifiers() & flag]
+            binding = "+".join(parts + [name])
+            try:
+                parse_hotkey(binding)
+            except ValueError as error:
+                self.setText(str(error))
+            else:
+                self.binding = binding
+                self.stop_recording()
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() in (Qt.MouseButton.BackButton, Qt.MouseButton.ForwardButton):
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
 
 class Settings(ProtectedWindow):
     apply_requested = Signal()
@@ -153,9 +185,11 @@ class Settings(ProtectedWindow):
         control = QWidget()
         controls = QVBoxLayout(control)
         hint = QLabel(
-            "Стандартні бінди: Ctrl+Win + клавіша. Win — клавіша з логотипом Windows.\n"
+            "Mouse4 — скрін, Mouse5 — відправка. Інші стандартні бінди: Ctrl+Win + клавіша.\n"
+            "Win — клавіша з логотипом Windows.\n"
             "Tab — перейти до кнопки; Enter або Space — записати бінд.\n"
             "Під час запису: Esc — скасувати; Backspace — прибрати бінд.\n"
+            "Бокові кнопки: Mouse4/Mouse5, окремо або з Ctrl/Shift. Win із мишкою відкриває «Пуск».\n"
             "Зміни діятимуть після «Застосувати». Ctrl+1…4 — перемикати вкладки."
         )
         hint.setWordWrap(True)
@@ -211,11 +245,20 @@ class Settings(ProtectedWindow):
         self.account.setWordWrap(True)
         account_layout.addWidget(self.account)
         self.login_button = QPushButton("Увійти через ChatGPT / повторно відкрити вкладку")
+        self.new_login_button = QPushButton("Інший акаунт / робочий простір")
+        self.account_list = QListWidget()
+        self.account_list.setAccessibleName("Збережені підключення ChatGPT")
+        self.account_list.setMaximumHeight(80)
+        self.account_list.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.account_list.hide()
+        self.active_account_id = None
+        account_layout.addWidget(self.account_list)
         self.cancel_login_button = QPushButton("Скасувати вхід")
         self.logout_button = QPushButton("Вийти з акаунта")
         self.usage_button = QPushButton("Перевірити ліміти в браузері")
         for button in (
             self.login_button,
+            self.new_login_button,
             self.cancel_login_button,
             self.logout_button,
             self.usage_button,
@@ -235,15 +278,34 @@ class Settings(ProtectedWindow):
         self.model_list.itemActivated.connect(self.choose_model)
         self.model_list.itemClicked.connect(self.choose_model)
         account_form.addRow(self.model_list)
+        self.reasoning_levels = ("low", "medium", "high", "xhigh", "max")
+        self.reasoning = QSlider(Qt.Orientation.Horizontal)
+        self.reasoning.setRange(0, len(self.reasoning_levels) - 1)
+        self.reasoning.setValue(self.reasoning_levels.index(config.reasoning_effort))
+        self.reasoning.setAccessibleName("Рівень аналізу: стрілки змінюють значення")
+        self.reasoning_label = QLabel()
+        self.reasoning.valueChanged.connect(self.update_reasoning_label)
+        self.update_reasoning_label()
+        reasoning_row = QWidget()
+        reasoning_layout = QHBoxLayout(reasoning_row)
+        reasoning_layout.setContentsMargins(0, 0, 0, 0)
+        reasoning_layout.addWidget(self.reasoning, 1)
+        reasoning_layout.addWidget(self.reasoning_label)
+        account_form.addRow("Рівень аналізу", reasoning_row)
         self.monitor = self.spin(
             account_form, "Монітор: 1 — перший; 0 — усі", 0, 32, config.monitor
         )
-        self.history_limit = self.spin(
-            account_form, "Відповідей в історії", 1, 100, config.history_limit
-        )
         account_layout.addLayout(account_form)
+        self.verify_answer = QCheckBox("Перевіряти відповідь перед показом (два запити)")
+        self.verify_answer.setChecked(config.verify_answer)
+        self.verify_answer.setAccessibleDescription(
+            "Повільніше й використовує більше ліміту. Код не запускається."
+        )
+        account_layout.addWidget(self.verify_answer)
         info = QLabel(
             "Вхід відкривається у звичайному браузері.\n"
+            "Для зміни акаунта або workspace натисни «Інший акаунт / робочий простір».\n"
+            "Збережене підключення: вибери його у списку й натисни кнопку входу.\n"
             "Налаштування застосовуються до наступного запиту.\n"
             "Історія текстів зберігається лише до закриття UCPC."
         )
@@ -251,7 +313,11 @@ class Settings(ProtectedWindow):
         info.setObjectName("muted")
         account_layout.addWidget(info)
         account_layout.addStretch()
-        self.tabs.addTab(account, "3 · Акаунт")
+        account_scroll = QScrollArea()
+        account_scroll.setWidgetResizable(True)
+        account_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        account_scroll.setWidget(account)
+        self.tabs.addTab(account_scroll, "3 · Акаунт")
 
         prompt_tab = QWidget()
         prompt_layout = QVBoxLayout(prompt_tab)
@@ -290,6 +356,22 @@ class Settings(ProtectedWindow):
             self.shortcuts.append(shortcut)
         self.center()
 
+    def set_accounts(self, accounts):
+        self.account_list.clear()
+        self.active_account_id = None
+        for account in accounts:
+            item = QListWidgetItem(account["label"])
+            item.setData(Qt.ItemDataRole.UserRole, account["id"])
+            self.account_list.addItem(item)
+            if account["active"]:
+                self.active_account_id = account["id"]
+                self.account_list.setCurrentItem(item)
+        self.account_list.setVisible(len(accounts) > 1)
+
+    def selected_account_id(self):
+        item = self.account_list.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
+
     @staticmethod
     def spin(form, label, lo, hi, value):
         spin = QSpinBox()
@@ -302,6 +384,15 @@ class Settings(ProtectedWindow):
 
     def choose_model(self, item):
         self.model.setText(item.data(Qt.ItemDataRole.UserRole))
+
+    def update_reasoning_label(self):
+        level = self.reasoning_levels[self.reasoning.value()]
+        names = {"low": "Швидкий", "medium": "Збалансований", "high": "Ретельний",
+                 "xhigh": "Глибокий", "max": "Максимальний"}
+        self.reasoning_label.setText(f"{names[level]} · {level}")
+        self.reasoning.setAccessibleDescription(
+            f"{names[level]}: {level}. Вищий рівень може потребувати більше часу."
+        )
 
     def set_models(self, models):
         self.model_list.clear()
@@ -328,7 +419,8 @@ class Settings(ProtectedWindow):
             theme=next(name for name, button in self.theme_buttons.items() if button.isChecked()),
             vision_model=self.model.text().strip(),
             monitor=self.monitor.value(),
-            history_limit=self.history_limit.value(),
+            verify_answer=self.verify_answer.isChecked(),
+            reasoning_effort=self.reasoning_levels[self.reasoning.value()],
         )
         config.validate()
         return config

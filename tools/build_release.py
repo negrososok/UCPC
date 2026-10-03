@@ -29,13 +29,18 @@ MODULES = (
     "app.py",
     "auth.py",
     "capture.py",
+    "code_format.py",
     "config.py",
+    "diagnostics.py",
     "engine.py",
     "history.py",
+    "help_panel.py",
     "hotkeys.py",
+    "mouse_bindings.py",
     "overlay.py",
     "privacy.py",
     "settings.py",
+    "solver.py",
     "theme.py",
 )
 

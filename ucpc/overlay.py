@@ -11,11 +11,20 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from .actions import DEFAULT_HOTKEYS, display_binding
 from .privacy import exclude_from_capture
 from .theme import ProtectedWindow
 
 
 class Overlay(ProtectedWindow):
+    def update_bindings(self, bindings):
+        names = {action: display_binding(bindings.get(action, "")) or "не призначено"
+                 for action in ("capture", "send", "help")}
+        self.text.setPlaceholderText(
+            f"Збери скріншоти: {names['capture']}.\nВідправ їх разом: {names['send']}.\n\n"
+            f"Допомога: {names['help']}."
+        )
+
     def __init__(self, font_size=18, opacity=94, width=660, height=580, theme="light"):
         super().__init__("UCPC · Відповідь", opacity, theme)
         self.setMinimumSize(440, 320)
@@ -37,13 +46,17 @@ class Overlay(ProtectedWindow):
         header.addWidget(self.counter)
         header.addStretch()
         self.settings_button = QPushButton("Налаштування")
+        self.verify_button = QPushButton("Перевірити")
         self.hide_button = QPushButton("Сховати")
         self.hide_button.clicked.connect(self.hide)
+        header.addWidget(self.verify_button)
         header.addWidget(self.settings_button)
         header.addWidget(self.hide_button)
         layout.addLayout(header)
         toolbar = QHBoxLayout()
-        self.capture_button = QPushButton("Новий скріншот")
+        self.capture_button = QPushButton("+ Скріншот")
+        self.send_button = QPushButton("Відправити · 0")
+        self.clear_images_button = QPushButton("Очистити")
         self.capture_button.setObjectName("primary")
         self.previous_button = QPushButton("←")
         self.previous_button.setAccessibleName("Попередня відповідь")
@@ -53,7 +66,13 @@ class Overlay(ProtectedWindow):
         self.smaller.setAccessibleName("Зменшити шрифт")
         self.larger = QPushButton("A+")
         self.larger.setAccessibleName("Збільшити шрифт")
-        for button in (self.capture_button, self.previous_button, self.next_button):
+        for button in (
+            self.capture_button,
+            self.send_button,
+            self.clear_images_button,
+            self.previous_button,
+            self.next_button,
+        ):
             toolbar.addWidget(button)
         toolbar.addStretch()
         toolbar.addWidget(self.smaller)
@@ -68,9 +87,7 @@ class Overlay(ProtectedWindow):
         self.text.setReadOnly(True)
         self.text.setAccessibleName("Текст відповіді нейромережі")
         self.text.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.text.setPlaceholderText(
-            "Зроби скріншот хоткеєм. Відповідь з’явиться тут автоматично.\n\nКлавіші керування — у налаштуваннях."
-        )
+        self.update_bindings(DEFAULT_HOTKEYS)
         self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         layout.addWidget(self.text, 1)
         bottom = QHBoxLayout()
@@ -148,7 +165,29 @@ class Overlay(ProtectedWindow):
                 cursor.movePosition(QTextCursor.MoveOperation.End)
                 cursor.insertText(text[len(self._text) :])
             else:
+                selected = self.text.textCursor()
+                points = []
+                for position in (selected.anchor(), selected.position()):
+                    probe = QTextCursor(self.text.document())
+                    probe.setPosition(position)
+                    points.append((probe.blockNumber(), probe.positionInBlock(), probe.block().text()))
                 self.text.setPlainText(text)
+                restored = QTextCursor(self.text.document())
+                for index, (number, column, old_line) in enumerate(points):
+                    block = self.text.document().findBlockByNumber(number)
+                    if not block.isValid():
+                        position = self.text.document().characterCount() - 1
+                    else:
+                        new_line = block.text()
+                        old_indent = len(old_line) - len(old_line.lstrip(" \t"))
+                        new_indent = len(new_line) - len(new_line.lstrip(" \t"))
+                        if old_line.lstrip(" \t") == new_line.lstrip(" \t"):
+                            column = (column - old_indent + new_indent
+                                      if column >= old_indent else min(column, new_indent))
+                        position = block.position() + max(0, min(column, block.length() - 1))
+                    restored.setPosition(position, QTextCursor.MoveMode.KeepAnchor if index
+                                         else QTextCursor.MoveMode.MoveAnchor)
+                self.text.setTextCursor(restored)
             self.text.verticalScrollBar().setValue(vertical)
             self.text.horizontalScrollBar().setValue(horizontal)
         self._track, self._text = track, text

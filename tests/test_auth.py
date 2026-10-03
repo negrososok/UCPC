@@ -95,6 +95,34 @@ def test_refresh_rotates_credentials_atomically_without_plaintext(tmp_path, monk
     assert b"old-secret" not in auth.path.read_bytes()
 
 
+def test_rejected_token_refresh_reuses_replacement_from_another_worker(tmp_path, monkeypatch):
+    auth = Auth(tmp_path)
+    auth._save({"client_id": "test", "subject": "test", "access_token": "old",
+                "refresh_token": "refresh", "scopes": [PLAN_SCOPE],
+                "expires_at": time.time() + 3600})
+    calls = []
+
+    def refresh(data):
+        calls.append(data)
+        return {"access_token": "new", "refresh_token": "rotated", "expires_in": 3600}
+
+    monkeypatch.setattr("ucpc.auth.token_request", refresh)
+    assert auth.access_token(rejected_token="old") == "new"
+    assert auth.access_token(rejected_token="old") == "new"
+    assert len(calls) == 1
+
+
+def test_refresh_before_a_long_job_uses_requested_validity_margin(tmp_path, monkeypatch):
+    auth = Auth(tmp_path)
+    auth._save({"client_id": "test", "subject": "test", "access_token": "old",
+                "refresh_token": "refresh", "scopes": [PLAN_SCOPE],
+                "expires_at": time.time() + 120})
+    monkeypatch.setattr("ucpc.auth.token_request", lambda _: {
+        "access_token": "new", "refresh_token": "rotated", "expires_in": 3600})
+    assert auth.access_token() == "old"
+    assert auth.access_token(min_validity=390) == "new"
+
+
 @pytest.mark.parametrize("offline", [False, True])
 def test_logout_clears_tokens_even_when_revoke_is_offline(tmp_path, monkeypatch, offline):
     import httpx

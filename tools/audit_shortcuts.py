@@ -7,6 +7,7 @@ import urllib.request
 from pathlib import Path
 
 from ucpc.actions import DEFAULT_HOTKEYS
+from ucpc.mouse_bindings import MOUSE_KEYS
 
 URL = "https://raw.githubusercontent.com/microsoft/vscode-docs/main/build/keybindings/doc.keybindings.win.json"
 
@@ -65,6 +66,8 @@ def main():
             key_codes.update({f"f{i}": 58 + i for i in range(1, 25)})
             for action, binding in DEFAULT_HOTKEYS.items():
                 parts = binding.split("+")
+                if parts[-1] in MOUSE_KEYS:
+                    continue  # VS Code's numeric KeyCode table describes keyboard keys only.
                 code = (
                     sum(
                         {"ctrl": 2048, "alt": 512, "shift": 1024, "win": 256}[p] for p in parts[:-1]

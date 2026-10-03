@@ -43,13 +43,15 @@ class Config:
     vision_model: str = "gpt-5.6-sol"
     api_vision_model: str = "gpt-4.1-mini"
     system_prompt_file: str = "system_prompt.txt"
-    request_prompt: str = "Проаналізуй скріншот згідно із системною інструкцією."
+    request_prompt: str = "Проаналізуй усі скріншоти разом згідно із системною інструкцією."
     max_output_tokens: int = 1800
-    request_timeout: float = 60.0
+    request_timeout: float = 180.0
+    generation_timeout: float = 600.0
+    verify_answer: bool = False
+    reasoning_effort: str = "high"
     monitor: int = 1
     max_image_size: int = 1920
     region: dict | None = None
-    history_limit: int = 20
     notifications: bool = False
     overlay_enabled: bool = True
     theme: str = "light"
@@ -63,7 +65,6 @@ class Config:
 
     def validate(self) -> None:
         limits = {
-            "history_limit": (1, 100),
             "monitor": (0, 32),
             "max_image_size": (320, 8192),
             "max_output_tokens": (1, 100_000),
@@ -78,12 +79,10 @@ class Config:
             value = getattr(self, name)
             if type(value) is not int or not lo <= value <= hi:
                 raise ValueError(f"{name}: потрібне ціле число від {lo} до {hi}")
-        if (
-            type(self.request_timeout) not in (int, float)
-            or not math.isfinite(self.request_timeout)
-            or self.request_timeout <= 0
-        ):
-            raise ValueError("request_timeout: потрібне скінченне додатне число")
+        for name in ("request_timeout", "generation_timeout"):
+            value = getattr(self, name)
+            if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name}: потрібне скінченне додатне число")
         for name in (
             "auth_mode",
             "vision_model",
@@ -98,7 +97,9 @@ class Config:
             raise ValueError("auth_mode: очікується chatgpt або api")
         if self.theme not in ("light", "dark"):
             raise ValueError("theme: очікується light або dark")
-        for name in ("notifications", "overlay_enabled"):
+        if self.reasoning_effort not in ("low", "medium", "high", "xhigh", "max"):
+            raise ValueError("reasoning_effort: очікується low, medium, high, xhigh або max")
+        for name in ("notifications", "overlay_enabled", "verify_answer"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name}: потрібне true або false")
         if not isinstance(self.hotkeys, dict) or not all(
@@ -176,6 +177,12 @@ def initialize() -> None:
 def load_config() -> Config:
     initialize()
     data = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8-sig"))
+    removed_limit = "history_limit" in data
+    added_solver_settings = any(k not in data for k in ("verify_answer", "reasoning_effort"))
+    added_generation_timeout = "generation_timeout" not in data
+    if added_generation_timeout and data.get("request_timeout") == 60:
+        data["request_timeout"] = Config().request_timeout
+    data.pop("history_limit", None)
     legacy = bool(set(data) & LEGACY_FIELDS)
     for field_name in LEGACY_FIELDS:
         data.pop(field_name, None)
@@ -208,10 +215,19 @@ def load_config() -> Config:
         else binding
         for action, binding in old_bindings.items()
     }
+    # Add new actions without taking shortcuts assigned by the user.
+    occupied = {parse_hotkey(b) for b in bindings.values() if b}
+    for action in ("copy", "send", "clear_images", "verify", "help"):
+        if action not in bindings:
+            default = DEFAULT_HOTKEYS[action]
+            parsed = parse_hotkey(default)
+            bindings[action] = default if parsed not in occupied else ""
+            if bindings[action]:
+                occupied.add(parsed)
     upgraded = bindings != old_bindings
     data["hotkeys"] = bindings
     config = Config(**data)
     config.validate()
-    if legacy or upgraded:
+    if legacy or upgraded or removed_limit or added_solver_settings or added_generation_timeout:
         save_config(config)
     return config

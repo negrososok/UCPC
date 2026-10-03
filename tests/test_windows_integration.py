@@ -16,13 +16,17 @@ from ucpc.hotkeys import Hotkeys
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Real Windows keyboard dispatch")
+@pytest.mark.stress
 @pytest.mark.parametrize("win_first", [False, True])
-def test_defaults_dispatch_from_real_input_without_alt_text_or_start_menu(win_first):
+def test_defaults_dispatch_from_real_input_without_alt_text_or_start_menu(
+    win_first, foreground_test_window
+):
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import QPlainTextEdit
 
     from ucpc.actions import DEFAULT_HOTKEYS
     from ucpc.hotkeys import parse_hotkey
+    from ucpc.mouse_bindings import MOUSE_KEYS
 
     class Keyboard(ctypes.Structure):
         _fields_ = [
@@ -53,6 +57,7 @@ def test_defaults_dispatch_from_real_input_without_alt_text_or_start_menu(win_fi
     native.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(Input), ctypes.c_int]
     native.SendInput.restype = wintypes.UINT
     native.GetForegroundWindow.restype = wintypes.HWND
+    native.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
     native.GetAsyncKeyState.argtypes = [ctypes.c_int]
     native.GetAsyncKeyState.restype = wintypes.SHORT
 
@@ -72,13 +77,17 @@ def test_defaults_dispatch_from_real_input_without_alt_text_or_start_menu(win_fi
     received = []
     keys = Hotkeys(qt, int(editor.winId()), DEFAULT_HOTKEYS, received.append)
     try:
-        editor.show()
-        editor.activateWindow()
+        foreground_test_window(editor)
         editor.setFocus()
         QTest.qWait(100)
         hwnd = int(editor.winId())
         assert native.GetForegroundWindow() == hwnd, "The test editor must own keyboard focus"
-        for action, binding in DEFAULT_HOTKEYS.items():
+        keyboard_bindings = {a: b for a, b in DEFAULT_HOTKEYS.items()
+                             if parse_hotkey(b)[1] not in MOUSE_KEYS.values()}
+        for action, binding in keyboard_bindings.items():
+            if native.GetForegroundWindow() != hwnd:
+                foreground_test_window(editor)
+                editor.setFocus()
             assert not native.GetAsyncKeyState(0x12) & 0x8000  # VK_MENU / Alt
             _, vk = parse_hotkey(binding)
             modifiers = [0x5B, 0xA2] if win_first else [0xA2, 0x5B]
@@ -87,8 +96,14 @@ def test_defaults_dispatch_from_real_input_without_alt_text_or_start_menu(win_fi
             send([vk, *reversed(modifiers)], up=True)
             QTest.qWait(30)
             assert received[-1:] == [action]
-            assert native.GetForegroundWindow() == hwnd  # Start never takes focus.
-        assert received == list(DEFAULT_HOTKEYS)
+            foreground = native.GetForegroundWindow()
+            foreground_class = ctypes.create_unicode_buffer(256)
+            native.GetClassNameW(foreground, foreground_class, len(foreground_class))
+            assert foreground == hwnd, {
+                "action": action, "binding": binding, "foreground": foreground,
+                "foreground_class": foreground_class.value,
+            }  # Start or another application must never take focus.
+        assert received == list(keyboard_bindings)
         assert editor.toPlainText() == "Synthetic editor: text must stay unchanged"
     finally:
         send([0x5B, 0xA2], up=True)

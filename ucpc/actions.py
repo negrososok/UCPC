@@ -1,10 +1,18 @@
 """One source of truth for the settings, help and global shortcuts."""
 
 ACTIONS = {
-    "capture": "Новий скріншот",
+    "help": "Допомога: усі чинні клавіші",
+    "capture": "Додати скріншот до запиту",
+    "send": "Відправити зібрані скріншоти",
+    "verify": "Перевірити результат запуску",
+    "copy": "Скопіювати всю поточну відповідь",
     "overlay": "Показати / приховати відповідь",
     "settings": "Показати / приховати налаштування",
     "cancel": "Скасувати генерацію",
+    "clear_images": "Очистити зібрані скріншоти",
+    "font_smaller": "Зменшити текст",
+    "font_larger": "Збільшити текст",
+    "center": "Повернути вікно в центр",
     "previous": "Попередня відповідь",
     "next": "Наступна відповідь",
     "overlay_up": "Прокрутити вгору",
@@ -17,9 +25,6 @@ ACTIONS = {
     "move_down": "Посунути вікно вниз",
     "move_left": "Посунути вікно ліворуч",
     "move_right": "Посунути вікно праворуч",
-    "center": "Повернути вікно в центр",
-    "font_smaller": "Зменшити текст",
-    "font_larger": "Збільшити текст",
 }
 
 PREVIOUS_DEFAULT_HOTKEYS = {
@@ -67,7 +72,7 @@ ALT_DEFAULT_HOTKEYS = {
 }
 
 # One shared prefix; avoid Alt mnemonics and Windows' reserved Ctrl+Win shortcuts.
-DEFAULT_HOTKEYS = {
+BATCH_DEFAULT_HOTKEYS = {
     "capture": "ctrl+win+f8",
     "overlay": "ctrl+win+f11",
     "settings": "ctrl+win+f12",
@@ -87,12 +92,30 @@ DEFAULT_HOTKEYS = {
     "center": "ctrl+win+f10",
     "font_smaller": "ctrl+win+f5",
     "font_larger": "ctrl+win+f6",
+    "copy": "ctrl+win+f7",
+    "send": "ctrl+win+f2",
+    "clear_images": "ctrl+win+f3",
 }
 
-OLD_DEFAULT_HOTKEYS = (PREVIOUS_DEFAULT_HOTKEYS, ALT_DEFAULT_HOTKEYS)
+KEYBOARD_DEFAULT_HOTKEYS = BATCH_DEFAULT_HOTKEYS | {
+    "help": "ctrl+win+f1",
+    "send": "ctrl+win+f9",
+    "verify": "ctrl+win+f10",
+    "cancel": "ctrl+win+f2",
+    "center": "ctrl+win+u",
+}
+
+DEFAULT_HOTKEYS = KEYBOARD_DEFAULT_HOTKEYS | {"capture": "mouse4", "send": "mouse5"}
+
+OLD_DEFAULT_HOTKEYS = (
+    PREVIOUS_DEFAULT_HOTKEYS, ALT_DEFAULT_HOTKEYS, BATCH_DEFAULT_HOTKEYS,
+    KEYBOARD_DEFAULT_HOTKEYS,
+)
 
 
 def display_binding(binding: str) -> str:
     return "+".join(
-        p.capitalize() if not p.lower().startswith("f") else p.upper() for p in binding.split("+")
+        {"mouse4": "Mouse4", "mouse5": "Mouse5"}.get(
+            p.lower(), p.capitalize() if not p.lower().startswith("f") else p.upper()
+        ) for p in binding.split("+")
     )

@@ -41,13 +41,14 @@ def test_100_000_snapshots_during_background_streaming():
 
 
 @pytest.mark.stress
-def test_5_000_history_replacements_release_old_responses():
-    history = History(20)
+def test_5_000_history_entries_are_retained_until_session_clear():
+    history = History()
     references = []
     tracemalloc.start()
     baseline = tracemalloc.get_traced_memory()[0]
-    for _ in range(5_000):
-        track = Track(text="x" * 8192)
+    for number in range(5_000):
+        # Distinct strings: a folded constant would share one 8 KB allocation.
+        track = Track(text=f"{number:05d}" + "x" * 8187)
         references.append(weakref.ref(track))
         history.add(track)
         history.move(-1)
@@ -55,9 +56,16 @@ def test_5_000_history_replacements_release_old_responses():
     gc.collect()
     used = tracemalloc.get_traced_memory()[0] - baseline
     tracemalloc.stop()
-    assert sum(ref() is not None for ref in references) == 20
-    assert len(history.items) == 20 and history.current is track
-    assert used < 2_000_000
+    assert sum(ref() is not None for ref in references) == 5_000
+    assert len({id(ref().text) for ref in references}) == 5_000
+    assert len(history.items) == 5_000 and history.current is track
+    history.index = 0
+    assert history.current is references[0]()
+    assert used < 60_000_000
+    history.clear()
+    gc.collect()
+    assert sum(ref() is not None for ref in references) == 1  # local `track`
+    assert not history.items and history.current is None
 
 
 @pytest.mark.stress
@@ -148,6 +156,7 @@ def test_text_limit_bounds_memory():
 
 
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), "bad", True])
-def test_invalid_timeout_fails_at_load(value):
+@pytest.mark.parametrize("field", ["request_timeout", "generation_timeout"])
+def test_invalid_timeout_fails_at_load(value, field):
     with pytest.raises(ValueError):
-        Config(request_timeout=value).validate()
+        Config(**{field: value}).validate()

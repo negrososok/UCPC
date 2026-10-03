@@ -1,4 +1,4 @@
-"""Thread-safe streaming responses and bounded, session-only reading history."""
+"""Thread-safe streaming responses and session-only reading history."""
 
 import time
 from dataclasses import dataclass, field
@@ -15,6 +15,10 @@ class Track:
     max_text_chars: int = 40_000
     scroll_y: int = 0
     scroll_x: int = 0
+    phase: str = "Готуємо запит"
+    task_images: tuple[str, ...] = field(default=(), repr=False)
+    kind: str = "answer"
+    candidate: str = field(default="", repr=False)
     _lock: RLock = field(default_factory=RLock, repr=False)
 
     def append_text(self, text: str) -> None:
@@ -30,9 +34,27 @@ class Track:
             if not self.complete and isinstance(model, str) and model.strip():
                 self.model = model[:200]
 
+    def format_text(self, formatter) -> None:
+        with self._lock:
+            if self.complete:
+                return
+            text = formatter(self.text)
+            if len(text) > self.max_text_chars:
+                raise RuntimeError("Відповідь перевищила ліміт тексту")
+            self.text = text
+
     def model_name(self) -> str:
         with self._lock:
             return self.model
+
+    def set_phase(self, phase: str) -> None:
+        with self._lock:
+            if not self.complete:
+                self.phase = phase
+
+    def current_phase(self) -> str:
+        with self._lock:
+            return self.phase
 
     def finish(self, error: str = "") -> None:
         with self._lock:
@@ -46,8 +68,7 @@ class Track:
 
 
 class History:
-    def __init__(self, limit: int = 20) -> None:
-        self.limit = max(1, limit)
+    def __init__(self) -> None:
         self.items: list[Track] = []
         self.index = -1
 
@@ -57,7 +78,6 @@ class History:
 
     def add(self, track: Track) -> None:
         self.items.append(track)
-        self.items = self.items[-self.limit :]
         self.index = len(self.items) - 1
 
     def move(self, delta: int) -> Track | None:

@@ -1,9 +1,11 @@
-"""RegisterHotKey integration: no keyboard hooks, no admin rights, no key logging."""
+"""Native keyboard hotkeys and optional side-button bindings; no input logging."""
 
 import ctypes
 from ctypes import wintypes
 
 from PySide6.QtCore import QAbstractNativeEventFilter
+
+from .mouse_bindings import MOUSE_KEYS, MouseHook
 
 MODIFIERS = {"alt": 0x1, "ctrl": 0x2, "shift": 0x4, "win": 0x8}
 KEYS = {
@@ -23,7 +25,9 @@ KEYS = {
 
 def parse_hotkey(value: str) -> tuple[int, int]:
     parts = [part.strip().lower() for part in value.split("+")]
-    if len(parts) < 2 or any(p not in MODIFIERS for p in parts[:-1]):
+    if (len(parts) < 2 and parts[-1] not in MOUSE_KEYS) or any(
+        p not in MODIFIERS for p in parts[:-1]
+    ):
         raise ValueError(f"Хоткей {value}: потрібні модифікатори ctrl/alt/shift/win і клавіша")
     if len(set(parts[:-1])) != len(parts[:-1]):
         raise ValueError(f"Повторений модифікатор: {value}")
@@ -31,7 +35,11 @@ def parse_hotkey(value: str) -> tuple[int, int]:
     for part in parts[:-1]:
         mods |= MODIFIERS[part]
     key = parts[-1]
-    if key in KEYS:
+    if key in MOUSE_KEYS:
+        if mods & MODIFIERS["win"]:
+            raise ValueError("Win із кнопкою мишки відкриває «Пуск». Вибери Mouse4/Mouse5 або Ctrl/Shift.")
+        vk = MOUSE_KEYS[key]
+    elif key in KEYS:
         vk = KEYS[key]
     elif len(key) == 1 and key.isascii() and key.isalnum():
         vk = ord(key.upper())
@@ -47,6 +55,8 @@ class Hotkeys(QAbstractNativeEventFilter):
         super().__init__()
         self.app, self.hwnd, self.callback = app, hwnd, callback
         self.registered = {}
+        self.keyboard_ids = set()
+        self.mouse_hook = None
         self.user32 = ctypes.WinDLL("user32", use_last_error=True)
         self.user32.RegisterHotKey.argtypes = [
             wintypes.HWND,
@@ -68,13 +78,17 @@ class Hotkeys(QAbstractNativeEventFilter):
             raise
 
     def _unregister(self):
-        for number in self.registered:
+        if self.mouse_hook:
+            self.mouse_hook.set_routes({})
+        for number in self.keyboard_ids:
             self.user32.UnregisterHotKey(self.hwnd, number)
+        self.keyboard_ids.clear()
         self.registered.clear()
 
     def _register(self, bindings):
         try:
             seen = set()
+            mouse_routes = {}
             for action, binding in bindings.items():
                 if not binding:
                     continue
@@ -86,6 +100,10 @@ class Hotkeys(QAbstractNativeEventFilter):
                 self.next_id += 1
                 if self.next_id > 0xBFFF:
                     raise RuntimeError("Перезапусти UCPC перед наступною зміною біндів")
+                if vk in MOUSE_KEYS.values():
+                    mouse_routes[(mods & 0xF, vk)] = number
+                    self.registered[number] = action
+                    continue
                 if action.startswith(("move_", "scroll_", "overlay_")):
                     mods &= ~0x4000  # Holding a scroll/movement key repeats naturally.
                 if not self.user32.RegisterHotKey(self.hwnd, number, mods, vk):
@@ -93,6 +111,15 @@ class Hotkeys(QAbstractNativeEventFilter):
                         f"Хоткей {binding} зайнятий або недоступний. Зміни його у налаштуваннях."
                     )
                 self.registered[number] = action
+                self.keyboard_ids.add(number)
+            if mouse_routes:
+                if self.mouse_hook is None:
+                    self.mouse_hook = MouseHook(self.hwnd)
+                self.mouse_hook.set_routes(mouse_routes)
+            elif self.mouse_hook:
+                # Keep the filter until app shutdown to swallow a pending release
+                # even if its binding was removed while the button was held.
+                self.mouse_hook.set_routes({})
         except Exception:
             self._unregister()
             raise
@@ -128,5 +155,8 @@ class Hotkeys(QAbstractNativeEventFilter):
 
     def close(self):
         self._unregister()
+        if self.mouse_hook:
+            self.mouse_hook.close()
+            self.mouse_hook = None
         self.suspended = False
         self.app.removeNativeEventFilter(self)
